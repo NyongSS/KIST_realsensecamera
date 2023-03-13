@@ -38,7 +38,7 @@ def convert_depth_to_phys_coord(xp, yp, depth, intr):
     return result[0], result[1], result[2]
 
 
-#이미지 줌하는 함수
+#이미지 줌하는 함수: 실제 사용 x
 def zoom(img: np.ndarray, scale, center=None):
     height, width = img.shape[:2]
     rate = height / width
@@ -177,6 +177,7 @@ def main():
     s_time = int(round(time.time() * 1000))
     # s_time = round(datetime.now().timestamp(), 3)
 
+    # For static images:
     # face mash 관련: 여기서부터 끝까지 모두 mediapipe
     #with문: 자원을 획득하고 사용 후 반납해야 하는 경우 주로 사용
     with mp_face_mesh_0.FaceMesh(
