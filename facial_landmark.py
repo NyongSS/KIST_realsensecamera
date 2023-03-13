@@ -32,9 +32,9 @@ def exponential_smoothing(a, x: np.ndarray, x_prev: np.ndarray) -> np.ndarray:
 
 
 #3D포인터에서 depth를 phys로 변환하는 함수
+#realsense 카메라 사용하기 위해 존재함.
 def convert_depth_to_phys_coord(xp, yp, depth, intr):
     result = rs.rs2_deproject_pixel_to_point(intr, [int(xp), int(yp)], depth)
-
     return result[0], result[1], result[2]
 
 
@@ -220,6 +220,8 @@ def main():
 
                 # img_rs0 = zoom(img_rs0.copy(), scale=zoom_scale)
 
+
+#output
                 img_raw = np.copy(img_rs0)
                 img_h, img_w, img_c = img_raw.shape
 
@@ -233,6 +235,8 @@ def main():
                 _, results = mediapipe_detection(img_rs0, face_mesh_0)
                 multi_face_landmarks = results.multi_face_landmarks
 
+
+################################################  mediapipe: face mesh 관련  #######################
                 try:
                     if multi_face_landmarks:
                         face_landmarks = results.multi_face_landmarks[0]
@@ -319,6 +323,10 @@ def main():
                         z = angles[2] * 360
 
                         angle_list.append(list([x, y, z]))
+
+#####################################################
+
+
 
                 #파이썬 오류 처리 except
                 except ValueError:
