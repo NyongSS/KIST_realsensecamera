@@ -1,175 +1,504 @@
-### Aruco marker generator : https://chev.me/arucogen/
 import cv2
-from cv2 import aruco
-import numpy as np
-import csv
-import time
+import cv2.aruco as aruco
 import pyrealsense2 as rs
-import math
-import pandas as pd
+import numpy as np
 import os
-
-from datetime import datetime
+import pickle
 from RealSense_Utilities.realsense_api.realsense_api import RealSenseCamera
 from RealSense_Utilities.realsense_api.realsense_api import find_realsense
 from RealSense_Utilities.realsense_api.realsense_api import frame_to_np_array
-from RealSense_Utilities.realsense_api.realsense_api import mediapipe_detection
+import csv
+import time
+import math
+from datetime import datetime
+#realsense 카메라 사용하기 위한 함수
+def findRealsenseCamera():
+    realsense_ctx = rs.context()
+    connected_devices = []
+    for i in range(len(realsense_ctx.devices)):
+        detected_camera = realsense_ctx.devices[i].get_info(rs.camera_info.serial_number)
+        connected_devices.append(detected_camera)
 
-# ARUCO_DICT = {
-# 	"DICT_4X4_50": cv2.aruco.DICT_4X4_50,
-# 	"DICT_4X4_100": cv2.aruco.DICT_4X4_100,
-# 	"DICT_4X4_250": cv2.aruco.DICT_4X4_250,
-# 	"DICT_4X4_1000": cv2.aruco.DICT_4X4_1000,
-# 	"DICT_5X5_50": cv2.aruco.DICT_5X5_50,
-# 	"DICT_5X5_100": cv2.aruco.DICT_5X5_100,
-# 	"DICT_5X5_250": cv2.aruco.DICT_5X5_250,
-# 	"DICT_5X5_1000": cv2.aruco.DICT_5X5_1000,
-# 	"DICT_6X6_50": cv2.aruco.DICT_6X6_50,
-# 	"DICT_6X6_100": cv2.aruco.DICT_6X6_100,
-# 	"DICT_6X6_250": cv2.aruco.DICT_6X6_250,
-# 	"DICT_6X6_1000": cv2.aruco.DICT_6X6_1000,
-# 	"DICT_7X7_50": cv2.aruco.DICT_7X7_50,
-# 	"DICT_7X7_100": cv2.aruco.DICT_7X7_100,
-# 	"DICT_7X7_250": cv2.aruco.DICT_7X7_250,
-# 	"DICT_7X7_1000": cv2.aruco.DICT_7X7_1000,
-# 	"DICT_ARUCO_ORIGINAL": cv2.aruco.DICT_ARUCO_ORIGINAL,
-# 	"DICT_APRILTAG_16h5": cv2.aruco.DICT_APRILTAG_16h5,
-# 	"DICT_APRILTAG_25h9": cv2.aruco.DICT_APRILTAG_25h9,
-# 	"DICT_APRILTAG_36h10": cv2.aruco.DICT_APRILTAG_36h10,
-# 	"DICT_APRILTAG_36h11": cv2.aruco.DICT_APRILTAG_36h11
-# }
+    return connected_devices
 
-#realsense 카메라 사용하기 위해 존재함. :: aruco marker를 인식하기 위해 realsense 카메라를 사용한다.
+
+# def inversePerspective(paramrvec, paramtvec):
+#     R, _ = cv2.Rodrigues(paramrvec)
+#     R = np.matrix(R).T
+#     invTvec = np.dot(R, np.matrix(-paramtvec))
+#     invRvec, _ = cv2.Rodrigues(R)
+#     return invRvec, invTvec
+# def drawAxis(img, p, q, colour, scale=1):
+#     angle = math.atan2(p.y - q.y, p.x - q.x)  # angle in radians
+#     hypotenuse = math.sqrt((p.y - q.y) ** 2 + (p.x - q.x) ** 2)
+#     # Here we lengthen the arrow by a factor of scale
+#     q = (int(p.x - scale * hypotenuse * math.cos(angle)), int(p.y - scale * hypotenuse * math.sin(angle)))
+#     cv2.line(img, p, q, colour, 1, cv2.LINE_AA)
+#     # create the arrow hooks
+#     p = (int(q[0] + 9 * math.cos(angle + math.pi / 4)), int(q[1] + 9 * math.sin(angle + math.pi / 4)))
+#     cv2.line(img, p, q, colour, 1, cv2.LINE_AA)
+#     p = (int(q[0] + 9 * math.cos(angle - math.pi / 4)), int(q[1] + 9 * math.sin(angle - math.pi / 4)))
+#     cv2.line(img, p, q, colour, 1, cv2.LINE_AA)
+
+#칼만필터: 잡음이 포함되어있는 측정치를 바탕으로 선형 역학계의 상태를 추정하는 재귀필터. 과거에 수행한 측정값을 바탕으로 현재의 상태 변수의 결합분포를 추정.
+#근데 실제로 사용되지 않음 ㅎ
+def TrackKalman(xm, ym):
+    """
+    input: xm, ym (측정값 - 가로, 세로 위치 정보)
+    output: xh, yh (추정값 - 가로, 세로 위치 정보)
+    """
+
+    global x, P, A, H, Q, R
+
+    # 상태변수: 동적 시스템의 동적 상태를 결정해 주는 최소개의 변수들.
+    # 상태변수 추정값과 오차 공분산 예측
+    xp = A.dot(x).reshape(4, 1)  # 4x4 * 4x1 = 4x1
+    Pp = A.dot(P).dot(A.T) + Q  # 오차공분산에 시스템 오차 추가 4x4 * 4*4 * 4*4 + 4*4 = 4x4
+
+    # 칼만 이득 계산
+    K = Pp.dot(H.T).dot(np.linalg.inv(H.dot(P).dot(H.T) + R))  # 4x4 * 4*2 * (2x4 * 4x4 * 4*2 + 2x2) = 4x2
+
+    z = np.array([[xm], [ym]])  # 2x1
+
+    # 추정값 계산
+    x = xp + (K.dot(z - (H.dot(xp)).reshape(2, 1))).reshape(4, 1)  # 4x1 + 4x2 * (2x1 - 2x4 * 4x1) = 4x1
+
+    # 오차 공분산 계산
+    P = Pp - K.dot(H).dot(Pp)  # 4x4 - 4x2 * 2x4 * 4x4 = 4x4
+
+    return x[0][0], x[2][0]  # 위치
+
+#color intrinsic과 depth intrinsic을 얻음.
+#intrinsic: 카메라 파라미터 행렬에서 카메라 렌즈와 센서 위치에 의해 결정되는 항목의 파라미터.
+def get_intrinsics(profileArg):
+    Color_intrinsics = profileArg.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
+    Depth_intrinsics = profileArg.get_stream(rs.stream.depth).as_video_stream_profile().get_intrinsics()
+    cameramatrix = np.array([[Color_intrinsics.fx, 0, Color_intrinsics.ppx], [0, Color_intrinsics.fy, Color_intrinsics.ppy], [0, 0, 1]], dtype=np.
+                            float64)
+    distcoeffs = np.array([Color_intrinsics.coeffs], dtype=np.float64)
+
+    model = Color_intrinsics.model
+
+    return cameramatrix, distcoeffs, model, Color_intrinsics, Depth_intrinsics
+
+#depth image를 physical로 projection하는 함수
 def convert_depth_to_phys_coord(xp, yp, depth, intr):
     result = rs.rs2_deproject_pixel_to_point(intr, [int(xp), int(yp)], depth)
+    return result[0], result[2], -result[1]
 
-    return result[0], result[1], result[2]
+#카메라에 의한 왜곡 보정: 왜곡되지 않은 점 반환하기.
+def return_undistortion_point(distPoint, intr):
+    point = rs.rs2_deproject_pixel_to_point(intr, distPoint, 1)
 
-#aruco marker 사용하기 위해 존재함
-dict_aruco = aruco.Dictionary_get(aruco.DICT_4X4_50)    #: "정의된 객체": 딕셔너리
-parameters = aruco.DetectorParameters_create()          #: "detection parametes"
+    Ux = int(point[0] * intr.fx + intr.ppx)
+    Uy = int(point[1] * intr.fy + intr.ppy)
+    return Ux, Uy
+
+
+# if not os.path.exists('./CameraCalibration.pckl'):
+#     print("You need to calibrate the camera you'll be using. See calibration project directory for details.")
+#     exit()
+# else:
+#     f = open('./CameraCalibration.pckl', 'rb')
+#     cameraMatrix, distCoeffs, _, _ = pickle.load(f)
+#     f.close()
+#
+#     print(cameraMatrix)
+#     print(distCoeffs)
+#     if cameraMatrix is None or distCoeffs is None:
+#         print(
+#             "Calibration issue. Remove ./CameraCalibration.pckl and recalibrate your camera with calibration_ChAruco.py.")
+#         exit()
+
+ARUCO_PARAMETERS = aruco.DetectorParameters()
+ARUCO_DICT = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+
+dt = 1
+A = np.array([[1, dt, 0, 0],
+              [0, 1, 0, 0],
+              [0, 0, 1, dt],
+              [0, 0, 0, 1]])
+H = np.array([[1, 0, 0, 0],
+              [0, 0, 1, 0]])
+Q = 1.0 * np.eye(4)
+R = np.array([[50, 0],
+              [0, 50]])
+P = 100 * np.eye(4)
+x = np.array([0, 0, 0, 0])
+
+# Create grid board object we're using in our stream
+# board = aruco.GridBoard(
+#     markersX=1,
+#     markersY=1,
+#     markerLength=0.027,
+#     markerSeparation=0.01,
+#     dictionary=ARUCO_DICT)
+
+# translation vector 값의 볒ㄴ화 확인.    0.027->0.07 : 변화 없음.
+board = aruco.GridBoard(
+    (1,1),
+    0.07,
+    0.01,
+    ARUCO_DICT)
+
+
+# Create vectors we'll be using for rotations and translations for postures
+rotation_vectors, translation_vectors = None, None
+axis = np.float32([[-.5, -.5, 0], [-.5, .5, 0], [.5, .5, 0], [.5, -.5, 0],
+                   [-.5, -.5, 1], [-.5, .5, 1], [.5, .5, 1], [.5, -.5, 1]])
+
+color_image_set = []
+rs_device = findRealsenseCamera()
 marker_list=[]
+rot_1 = []
+rot_2 = []
+trs_1 = []
+trs_2 = []
+# Configure depth and color streams...
+# ...from Camera 1
+pipeline_1 = rs.pipeline()
+config_1 = rs.config()
+config_1.enable_device(rs_device[0])
+config_1.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+config_1.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
 
-#realsense 카메라 사용하기 위해 존재함.
-cameras = {}
-realsense_device = find_realsense()
-rs_main = None
+# Start streaming from both cameras
+profile = pipeline_1.start(config_1)
 
-for serial, devices in realsense_device:
-    if serial == '123622270472':
-        cameras[serial] = RealSenseCamera(depth_stream_width=640, depth_stream_height=480,
-                                          color_stream_width=640, color_stream_height=480,
-                                          color_stream_fps=30, depth_stream_fps=90,
-                                          device=devices, adv_mode_flag=True, device_type="d415")
-    else:
-        cameras[serial] = RealSenseCamera(depth_stream_width=640, depth_stream_height=480,
-                                          color_stream_width=640, color_stream_height=480,
-                                          color_stream_fps=30, depth_stream_fps=90,
-                                          device=devices, device_type="d455", adv_mode_flag=True)
+cameraMatrix, distCoeffs, cameraModel, C_Intr, D_Intr = get_intrinsics(profile)
+
+depth_sensor = profile.get_device().first_depth_sensor()
+depth_scale = depth_sensor.get_depth_scale()
+print("Depth Scale is: ", depth_scale)
+
+clipping_distance_in_meters = 1.5  # 1 meter
+clipping_distance = clipping_distance_in_meters / depth_scale
+
+align_to = rs.stream.color
+align = rs.align(align_to)
+
+radian = 180 / math.pi
+print(radian)
+
+try:
+    while True:
+        # Camera 1
+        # Wait for a coherent pair of frames: depth and color
+        frames_1 = pipeline_1.wait_for_frames()
+        aligned_frames = align.process(frames_1)
+        depth_frame_1 = aligned_frames.get_depth_frame()
+        color_frame_1 = aligned_frames.get_color_frame()
+        if not depth_frame_1 or not color_frame_1:
+            continue
+        # Convert images to numpy arrays: 이미지 프레임을 depth, color 넘파이로 변환
+        depth_image_1 = np.asanyarray(depth_frame_1.get_data())
+        color_image_1 = np.asanyarray(color_frame_1.get_data())
+        # Apply colormap on depth image (image must be converted to 8-bit per pixel first)
+        # depth_colormap_1 = cv2.applyColorMap(cv2.convertScaleAbs(depth_image_1, alpha=0.5), cv2.COLORMAP_JET)
+
+        gray = cv2.cvtColor(color_image_1, cv2.COLOR_BGR2GRAY)
+
+        # Detect Aruco markers
+        corners, ids, rejectedImgPoints = aruco.detectMarkers(gray, ARUCO_DICT, parameters=ARUCO_PARAMETERS)
+
+        # millisecond로 현재 시간 받기
+        s_time = int(round(time.time() * 1000))
+        # current_timestamp = rs_main.current_timestamp
+        c_time = int(round(time.time() * 1000)) - s_time  # 앞에서 받은 현재의 밀리셐 시간에서 루프를 돌면서 받은 밀리셐 시간 차 계산
 
 
-#realsense 카메라 사용하기 위해 존재함.
-for ser, dev in cameras.items():
-    rs_main = dev
+        # Refine detected markers
+        # Eliminates markers not part of our board, adds missing markers to the board
+        corners, ids, rejectedImgPoints, recoveredIds = aruco.refineDetectedMarkers(
+            image=gray,
+            board=board,
+            detectedCorners=corners,
+            detectedIds=ids,
+            rejectedCorners=rejectedImgPoints,
+            cameraMatrix=cameraMatrix,
+            distCoeffs=distCoeffs)
 
-    s_time=int(round(time.time()*1000))
+        # detected id에 따라 아래의 것들을 수행. detected id가 여러개이면 여러번 수행할 것.
+        # 마커 번호 달아서 네모 쳐서 보여주기
+        # Outline all of the markers detected in our image
+        # Uncomment below to show ids as well
+        # ProjectImage = aruco.drawDetectedMarkers(ProjectImage, corners, ids, borderColor=(0, 0, 255))
+        color_image_1 = aruco.drawDetectedMarkers(color_image_1, corners, borderColor=(0, 0, 255))
 
-    try:
-        while True:
-            rs_main.get_data()
 
-            current_timestamp = rs_main.current_timestamp
-            c_time=int(round(time.time()*1000))-s_time
-            #print(c_time)
 
-            frameset = rs_main.frameset
-            rs_main.get_aligned_frames(frameset, aligned_to_color=True)
+        # 이 부분은 마커의 코너와 깊이에 따라 검출하는 로직
+        if len(corners) > 0:
+            """
+            for i in range(0, len(ids)):qqqaq
+                # Estimate pose of each marker and return the values rvec and tvec---(different from those of camera coefficients)
+                rvec, tvec, markerPoints = cv2.aruco.estimatePoseSingleMarkers(corners[i], 0.02, cameraMatrix=cam_matrix,
+                                                                         distCoeffs=dist_matrix)
+            """
 
-            frameset = rs_main.depth_to_disparity.process(rs_main.frameset)
-            frameset = rs_main.spatial_filter.process(frameset)
-            frameset = rs_main.temporal_filter.process(frameset)
-            frameset = rs_main.disparity_to_depth.process(frameset)
-            frameset = rs_main.hole_filling_filter.process(frameset).as_frameset()
+            
 
-            rs_main.frameset = frameset
+            #print(rotation_vectors)
 
-            rs_main.color_frame = frameset.get_color_frame()
-            rs_main.depth_frame = frameset.get_depth_frame()
+            for (markerCorner, markerID) in zip(corners, ids):
+                corners_list = markerCorner.reshape((4, 2))
+                (topLeft, topRight, bottomRight, bottomLeft) = corners_list
+                topRight = (topRight[0], topRight[1])
+                bottomRight = (bottomRight[0], bottomRight[1])
+                bottomLeft = (bottomLeft[0], bottomLeft[1])
+                topLeft = (topLeft[0], topLeft[1])
 
-            rs_main.color_image = frame_to_np_array(rs_main.color_frame)
+                # depth calculate
+                # 정사각형의 네 모서리를 이용해서 pose를 측정하는데, 마커가 두 개이고, 각 마커의 같은 위치를 쌍으로 하여 거리를 바탕으로 depth를 구한다.
+                # x, y 좌표와 realsense의 함수를 사용해서 depth를 구할 수 있다.
+                depth_tr = depth_frame_1.get_distance(topRight[0], topRight[1])
+                depth_tl = depth_frame_1.get_distance(topLeft[0], topLeft[1])
+                depth_br = depth_frame_1.get_distance(bottomRight[0], bottomRight[1])
+                depth_bl = depth_frame_1.get_distance(bottomLeft[0], bottomLeft[1])
 
-            img_rs0 = np.copy(rs_main.color_image)
-            # img_rs0 = zoom(img_rs0.copy(), scale=zoom_scale)
-            img_raw = np.copy(img_rs0)
+                center_x = (topRight[0] + topLeft[0] + bottomLeft[0] + bottomRight[0]) / 4
+                center_y = (topRight[1] + topLeft[1] + bottomLeft[1] + bottomRight[1]) / 4
+                dist = depth_frame_1.get_distance(int(center_x), int(center_y))
+                xx, yy, zz = convert_depth_to_phys_coord(center_x, center_y, dist, C_Intr)
+                xx = xx / depth_scale
+                yy = yy / depth_scale
+                zz = zz / depth_scale
 
-            #openCV: 색 변환 함수 : rgb에서 gray로 색을 변환하기.:: 그레이 스케일 이미지로 변환
-            gray = cv2.cvtColor(img_rs0, cv2.COLOR_RGB2GRAY)    #: "마커를 찾을 이미지"
-            #그레이로 변환 후 // 이진화를 하고 contour를 추출하는 과정이 없음.
+                #구한 x, y, depth값으로 physical값을 구한다. 
+                topRight = (convert_depth_to_phys_coord(topRight[0], topRight[1], depth_tr, C_Intr))
+                topLeft = (
+                    convert_depth_to_phys_coord(topLeft[0], topLeft[1], depth_tl, C_Intr))
+                bottomRight = (
+                    convert_depth_to_phys_coord(bottomRight[0], bottomRight[1], depth_br, C_Intr))
+                bottomLeft = (
+                    convert_depth_to_phys_coord(bottomLeft[0], bottomLeft[1], depth_bl, C_Intr))
+                # rot_x_1 = 0
+                # rot_y_1 = 0
+                # rot_z_1 = 0
+                # rot_x_2 = 0
+                # rot_y_2 = 0
+                # rot_z_2 = 0
+                rot_1_x = 0
+                rot_1_y = 0
+                rot_1_z = 0
+                trs_1_x = 0
+                trs_1_y = 0
+                trs_1_z = 0
 
-            img_h, img_w, img_c = img_rs0.shape
+                rot_2_x = 0
+                rot_2_y = 0
+                rot_2_z = 0
+                trs_2_x = 0
+                trs_2_y = 0
+                trs_2_z = 0
 
-#############aruco marker##########
-            #detect marker: 실제 마커 검출하는 함수.
-            corners, ids, rejectedImgPoints = aruco.detectMarkers(gray, dict_aruco, parameters=parameters)
+                #convert depth to phys coord를 돌린 z의 center 값: 머리 중앙의 위치
+                center_x = (topRight[0] + topLeft[0] + bottomLeft[0] + bottomRight[0]) / 4
+                center_y = (topRight[1] + topLeft[1] + bottomLeft[1] + bottomRight[1]) / 4
+                center_z = (topRight[2] + topLeft[2] + bottomLeft[2] + bottomRight[2]) / 4
 
-            #이 부분은 마커의 코너와 깊이에 따라 검출하는 로직
-            if len(corners) > 0:
-                """
-                for i in range(0, len(ids)):
-                    # Estimate pose of each marker and return the values rvec and tvec---(different from those of camera coefficients)
-                    rvec, tvec, markerPoints = cv2.aruco.estimatePoseSingleMarkers(corners[i], 0.02, cameraMatrix=cam_matrix,
-                                                                             distCoeffs=dist_matrix)
-                """
-                #ids = ids.flatten()
-                for (markerCorner, markerID) in zip(corners, ids):
-                    corners_list = markerCorner.reshape((4, 2))
-                    (topLeft, topRight, bottomRight, bottomLeft) = corners_list
-                    topRight = (topRight[0], topRight[1])
-                    bottomRight = (bottomRight[0], bottomRight[1])
-                    bottomLeft = (bottomLeft[0], bottomLeft[1])
-                    topLeft = (topLeft[0], topLeft[1])
 
-                    #depth calculate
-                    depth_tr = rs_main.depth_frame.get_distance(topRight[0], topRight[1])
-                    depth_tl = rs_main.depth_frame.get_distance(topLeft[0], topLeft[1])
-                    depth_br = rs_main.depth_frame.get_distance(bottomRight[0], bottomRight[1])
-                    depth_bl = rs_main.depth_frame.get_distance(bottomLeft[0], bottomLeft[1])
+                # ids = ids.flatten()
+                rotation_vectors, translation_vectors, _objPoints = aruco.estimatePoseSingleMarkers(corners, 7,
+                                                                                                    cameraMatrix,
+                                                                                                    distCoeffs)
+                rvecss = rotation_vectors[0][0]
+                rot_mat, _jacob = cv2.Rodrigues(rvecss)
+                print(rot_mat)
 
-                    topRight = (convert_depth_to_phys_coord(topRight[0], topRight[1],depth_tr,rs_main.color_intrinsics))
-                    topLeft = (
-                        convert_depth_to_phys_coord(topLeft[0], topLeft[1], depth_tl, rs_main.color_intrinsics))
-                    bottomRight = (
-                        convert_depth_to_phys_coord(bottomRight[0], bottomRight[1], depth_br, rs_main.color_intrinsics))
-                    bottomLeft = (
-                        convert_depth_to_phys_coord(bottomLeft[0], bottomLeft[1], depth_bl, rs_main.color_intrinsics))
+                # id의 개수에 따라 인식되는 rvecs의 개수가 다름. 따라서 어떤 마커가 인식되냐에 따라 벡터의 종류가 달라질수도,
+                # 개수가 달라질 수도 있음.
+                #print(translation_vectors)
+                if len(ids) == 2:
+                    rot_1 = [rotation_vectors[0][0][0], rotation_vectors[0][0][1], rotation_vectors[0][0][2]]
+                    rot_1_x = rotation_vectors[0][0][0] * radian
+                    rot_1_y = rotation_vectors[0][0][1]
+                    rot_1_z = rotation_vectors[0][0][2]
 
-                    marker_list.append([c_time, markerID, topRight, topLeft, bottomRight, bottomLeft])
+                    rot_2 = [rotation_vectors[1][0][0], rotation_vectors[1][0][1], rotation_vectors[1][0][2]]
+                    rot_2_x = rotation_vectors[1][0][0]
+                    rot_2_y = rotation_vectors[1][0][1]
+                    rot_2_z = rotation_vectors[1][0][2]
 
-            #적어도 하나의 마커가 검출 되었을 때.
-            #draw : 검출된 마커들을 영상에 그려준다. :: 카메라를 통해 입력받은 영상에서 마커 검출 -> 결과물은 이미지
-            frame_markers = aruco.drawDetectedMarkers(img_raw, corners, ids)
+                    trs_1 = [translation_vectors[0][0][0], translation_vectors[0][0][1], translation_vectors[0][0][2]]
+                    trs_1_x = translation_vectors[0][0][0]
+                    trs_1_y = translation_vectors[0][0][1]
+                    trs_1_z = translation_vectors[0][0][2]
+
+                    trs_2 = [translation_vectors[1][0][0], translation_vectors[1][0][1], translation_vectors[1][0][2]]
+                    trs_2_x = translation_vectors[1][0][0]
+                    trs_2_y = translation_vectors[1][0][1]
+                    trs_2_z = translation_vectors[1][0][2]
+
+
+
+
+                    # trs_depth = depth_frame_1.get_distance(trs_1[0], trs_1[1])
+                    # trs = (convert_depth_to_phys_coord(trs_1[0], trs_1[1], trs_depth, C_Intr))
+                    # print(trs)
+                    #정제되지 않은 corner의 평균값 : trs가 corner로부터 나왔으니까 확인해 보기 위해서.
+                    # x_mean = (corners[int(i)][0][0][0] + corners[int(i)][0][1][0] + corners[int(i)][0][2][0] + corners[int(i)][0][3][0])*0.25
+                    # print((topRight[2] + topLeft[2] + bottomLeft[2] + bottomRight[2]) / 4)
+                    # print(x_mean)
+                    #
+                    # print(trs_1[2])
+                    # print(trs_2[2])
+
+                    # rot_x_1 = rotation_vectors[0][0][0]
+                    # rot_y_1 = rotation_vectors[0][0][1]
+                    # rot_z_1 = rotation_vectors[0][0][2]
+                    # rot_x_2 = rotation_vectors[1][0][0]
+                    # rot_y_2 = rotation_vectors[1][0][1]
+                    # rot_z_2 = rotation_vectors[1][0][2]
+
+
+                elif len(ids) == 1 and ids[0][0] == 1:
+                    rot_2_x = 0
+                    rot_2_y = 0
+                    rot_2_z = 0
+                    trs_2_x = 0
+                    trs_2_y = 0
+                    trs_2_z = 0
+                    rot_1 = [rotation_vectors[0][0][0], rotation_vectors[0][0][1], rotation_vectors[0][0][2]]
+                    rot_1_x = rotation_vectors[0][0][0]
+                    rot_1_y = rotation_vectors[0][0][1]
+                    rot_1_z = rotation_vectors[0][0][2]
+                    trs_1 = [translation_vectors[0][0][0], translation_vectors[0][0][1], translation_vectors[0][0][2]]
+                    trs_1_x = translation_vectors[0][0][0]
+                    trs_1_y = translation_vectors[0][0][1]
+                    trs_1_z = translation_vectors[0][0][2]
+                    # rot_x_1 = rotation_vectors[0][0][0]
+                    # rot_y_1 = rotation_vectors[0][0][1]
+                    # rot_z_1 = rotation_vectors[0][0][2]
+
+
+                elif len(ids) == 1 and ids[0][0] == 2:
+                    rot_1_x = 0
+                    rot_1_y = 0
+                    rot_1_z = 0
+                    trs_1_x = 0
+                    trs_1_y = 0
+                    trs_1_z = 0
+                    rot_2 = [rotation_vectors[0][0][0], rotation_vectors[0][0][1], rotation_vectors[0][0][2]]
+                    rot_2_x = rotation_vectors[0][0][0]
+                    rot_2_y = rotation_vectors[0][0][1]
+                    rot_2_z = rotation_vectors[0][0][2]
+                    trs_2 =[translation_vectors[0][0][0], translation_vectors[0][0][1], translation_vectors[0][0][2]]
+                    trs_2_x = translation_vectors[0][0][0]
+                    trs_2_y = translation_vectors[0][0][1]
+                    trs_2_z = translation_vectors[0][0][2]
+
+                # tmp = (topRight+topLeft+bottomRight+bottomLeft)/4
+
+                # marker_list.append([c_time, markerID, topRight, topLeft, bottomRight, bottomLeft, rot_1, rot_2, trs_1, trs_2, center])
+                # marker_list.append(
+                # [c_time, markerID, topRight, topLeft, bottomRight, bottomLeft])
+                marker_list.append([c_time, markerID, rot_1_x, rot_1_y, rot_1_z, rot_2_x, rot_2_y, rot_2_z, trs_1_x, trs_1_y, trs_1_z, trs_2_x, trs_2_y, trs_2_z])
+
             marker = np.array(marker_list, dtype=object)
 
-            ##realsense 카메라 -> cv2에서 이미지 출력하기
-            cv2.imshow('frame', frame_markers)
-            cv2.namedWindow('frame', cv2.WINDOW_NORMAL)
-            key = cv2.waitKey(1)
-
-            if key & 0xFF == ord('q'):
-                cv2.destroyAllWindows()
-                break
-
-            #save csv
-            if key & 0xFF == ord('s'):
-                suffix = datetime.now().strftime('%y%m%d_%H%M%S')
-                fileName = suffix + '.csv'
-                with open("marker"+fileName, 'w', newline='') as f:
-                    writer = csv.writer(f)
-                    writer.writerows(marker)
-                    marker_list.clear()
-
-    finally:
-        rs_main.stop()
 
 
 
+
+        # Draw the Charuco board we've detected to show our calibrator the board was properly detected
+        # Require at least 1 marker before drawing axis
+        if ids is not None and len(ids) > 0:
+            # Estimate the posture per each Aruco marker
+            rotation_vectors, translation_vectors, _objPoints = aruco.estimatePoseSingleMarkers(corners, 7,
+                                                                                                cameraMatrix,
+                                                                                                distCoeffs)
+
+
+
+            if len(corners) == 2:
+                x_sum_ = (corners[0][0][0][0] + corners[0][0][1][0] + corners[0][0][2][0] +corners[0][0][3][0])*0.25 + (corners[1][0][0][0] + corners[1][0][1][0] + corners[1][0][2][0] +corners[1][0][3][0])*0.25
+                y_sum_ = (corners[0][0][0][1] + corners[0][0][1][1] + corners[0][0][2][1] + corners[0][0][3][1])*0.25 + (corners[1][0][0][1] + corners[1][0][1][1] + corners[1][0][2][1] + corners[1][0][3][1])*0.25
+                x_sum_ = x_sum_/2
+                y_sum_ = y_sum_/2
+                #print(x_sum_, y_sum_)
+
+            # 파이썬 zip 내장함수: 리스트 등의 요소 묶어줌.
+            for rvec, tvec in zip(rotation_vectors, translation_vectors):
+                color_image_1 = cv2.drawFrameAxes(color_image_1, cameraMatrix, distCoeffs, rvec, tvec, 1)
+                #color_image_1 = cv2.drawAxis(color_image_1, cameraMatrix, distCoeffs, rvec, tvec, 1)
+                #aruco.drawAxis(color_image_1, cameraMatrix, distCoeffs, rvec, tvec, 1)
+
+            #print(len(corners))
+            if len(corners) == 2:
+                print(corners)
+            try:
+                #center: 마커의 네 꼭짓점의 값들을 모두 더해서 평균을 냄. (x, y 각각 수행)
+                for i in range(len(corners)):
+                    x_sum = corners[int(i)][0][0][0] + corners[int(i)][0][1][0] + corners[int(i)][0][2][0] + corners[int(i)][0][3][0]
+                    y_sum = corners[int(i)][0][0][1] + corners[int(i)][0][1][1] + corners[int(i)][0][2][1] + corners[int(i)][0][3][1]
+
+                    x_cen_0 = x_sum * .25
+                    y_cen_0 = y_sum * .25
+                    # print(x_cen_0, y_cen_1)
+
+                    # x_k, y_k = TrackKalman(x_cen_0, y_cen_1)
+
+                    # x_u, y_u = return_undistortion_point([int(x_cen_0), int(y_cen_1)], C_Intr)
+
+                    #distance: x와 y의 center를 통해 distance == depth를 구해서, depth scale로 나눔. ==> depth(z)
+                    dist = depth_frame_1.get_distance(int(x_cen_0), int(y_cen_0))
+                    print("x_{} : {}, y_{} : {}, dist_1 : {}".format(int(ids[i]), int(x_cen_0), int(ids[i]), int(y_cen_0), dist / depth_scale))                              #인식된 실제 값
+                    if not dist == 0:
+                        #x, y, z를 모두 depth에서 physical coordinate로 convert한 후 depth scale로 나눈 값들.
+                        Cx, Cy, Cz = convert_depth_to_phys_coord(x_cen_0, y_cen_0, dist, C_Intr)
+                        print("Cx_{} : {}, Cy_{} : {}, Cz_{} : {}".format(int(ids[i]), Cx / depth_scale, int(ids[i]), Cy / depth_scale, int(ids[i]), Cz / depth_scale))     #depth에서 physical로 convert한 값
+
+                    # liner code
+                    # cen_0_vec = np.array([[x_cen_0], [y_cen_1]])
+                    #
+                    # x_cen_1 = (corners[0][0][0][0] + corners[0][0][3][0]) * .5
+                    # y_cen_1 = (corners[0][0][0][1] + corners[0][0][3][1]) * .5
+                    # # print(x_cen_1, y_cen_1)
+                    #
+                    # cen_1_vec = np.array([[x_cen_1], [y_cen_1]])
+                    # cen_0_cen_1_vec = cen_1_vec - cen_0_vec
+                    #
+                    # # print(cen_0_cen_1_vec)
+                    #
+                    # tar_vec = cen_0_vec + 9 * cen_0_cen_1_vec
+                    #
+                    # # print(tar_vec[0], tar_vec[1])
+                    #
+                    # color_image_1 = cv2.line(color_image_1, (int(x_cen_0), int(y_cen_1)), (int(tar_vec[0]), int(tar_vec[1]))
+                    #                          , (0, 255, 0), 4)
+            except IndexError as e:
+                print("index error :", e)
+                pass
+
+            except Exception as e:
+                print("can't draw line :", e)
+
+        # Show images from both cameras
+        cv2.namedWindow('RealSense', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow('RealSense', 640, 480)
+        cv2.imshow('RealSense', color_image_1)
+        cv2.waitKey(1)
+
+        # Save images and depth maps from both cameras by pressing 's'
+        #키보드를 누른 후 25ms동안 대기. ch는 사용자가 누른 키의 아스키코드 값을 리턴함.
+        ch = cv2.waitKey(25)
+        #s의 아스키코드가 115
+        if ch == 115:
+            suffix = datetime.now().strftime('%y%m%d_%H%M%S')
+            fileName = suffix + '.csv'
+            with open("marker" + fileName, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerows(marker)
+                marker_list.clear()
+                print("Save!!")
+            cv2.imwrite("my_image_1.jpg", color_image_1)
+            print("Save")
+        #esc를 누르거나 q를 누르면 종료시키기. (esc의 아스키 코드가 27)
+        elif ch & 0xFF == ord('q') or ch == 27:
+            cv2.destroyAllWindows()
+            break
+
+finally:
+    # Stop streaming
+    pipeline_1.stop()
