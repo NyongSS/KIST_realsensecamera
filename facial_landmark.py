@@ -204,7 +204,7 @@ def main():
             cameras[serial] = RealSenseCamera(depth_stream_width=640, depth_stream_height=480,
                                               color_stream_width=640, color_stream_height=480,
                                               color_stream_fps=30, depth_stream_fps=90,
-                                              device=devices, device_type="d415", adv_mode_flag=True)
+                                              device=devices, device_type="d455", adv_mode_flag=True)
 
     for ser, dev in cameras.items():
         rs_main = dev
